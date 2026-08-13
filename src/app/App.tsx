@@ -1,70 +1,250 @@
-import React, { createContext, useContext, useState } from "react";
-import { BrowserRouter } from "react-router-dom";
-import { router } from "./routes";
-import { Memory } from "./data/poi";
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from "react";
 import { RouterProvider } from "react-router-dom";
+import { MotionConfig } from "motion/react";
+import { router } from "./routes";
+import { Memory, POI } from "./data/poi";
+import { supabase } from "./lib/supabase";
+import { AuthProvider, useAuth } from "./context/AuthContext";
+import { useAccessibility } from "./context/AccessibilityContext";
+import { useUserLocation, distanceKm, formatDistance } from "./lib/useUserLocation";
 
-// --- Context ---
 interface AppContextType {
   memories: Memory[];
-  addMemory: (memory: Omit<Memory, "id" | "date" | "timestamp">) => string;
-  deleteMemory: (id: string) => void;
+  pois: POI[];
+  loadingMemories: boolean;
+  loadingPois: boolean;
+  addMemory: (
+    memory: Omit<Memory, "id" | "date" | "timestamp" | "userId" | "authorName">,
+  ) => Promise<string | null>;
+  deleteMemory: (id: string) => Promise<void>;
+  updateMemoryVisibility: (id: string, visibility: "public" | "private") => Promise<boolean>;
   getMemoriesByPOI: (poiId: string) => Memory[];
+  fetchMemoriesForPOI: (poiId: string) => Promise<Memory[]>;
+  incrementViews: (poiId: string) => Promise<void>;
+  locationStatus: "idle" | "requesting" | "granted" | "denied" | "unavailable";
+  requestLocation: () => void;
+  detectedCountryCode: string | null;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
-const INITIAL_MEMORIES: Memory[] = [
-  {
-    id: "1",
-    poiId: "bahrain-fort",
-    poiName: "Bahrain Fort",
-    type: "photo",
-    content:
-      "https://images.unsplash.com/photo-1716740975436-e973756e526c?q=80&w=300",
-    caption:
-      "Amazing ancient fort by the sea! The kids loved exploring the ruins.",
-    date: "2 days ago",
-    timestamp: Date.now() - 2 * 24 * 60 * 60 * 1000,
-  },
-  {
-    id: "2",
-    poiId: "bab-al-bahrain",
-    poiName: "Bab Al Bahrain",
-    type: "text",
-    content:
-      "Incredible experience walking through the old souq. The kids loved the spice stalls.",
-    date: "1 week ago",
-    timestamp: Date.now() - 7 * 24 * 60 * 60 * 1000,
-  },
-];
+// Maps a Supabase `attractions` row to the frontend POI shape.
+function mapAttractionRow(row: any): POI {
+  return {
+    id: row.id,
+    name: row.name,
+    category: row.category,
+    distance: row.distance ?? "",
+    distanceKm: null,
+    country: row.country,
+    countryCode: row.country_code,
+    latitude: row.latitude,
+    longitude: row.longitude,
+    description: row.description,
+    fullDescription: row.full_description,
+    imageUrl: row.image_url,
+    location: row.location,
+    rating: row.rating,
+    views: row.views,
+    details: {
+      built: row.built ?? undefined,
+      height: row.height ?? undefined,
+      access: row.access ?? undefined,
+      open: row.open_hours ?? undefined,
+      entry: row.entry ?? undefined,
+      features: row.features ?? undefined,
+    },
+  };
+}
+
+// Maps a Supabase `memories` row to the frontend Memory shape.
+function mapMemoryRow(row: any): Memory {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    poiId: row.poi_id,
+    poiName: row.poi_name,
+    type: row.type,
+    content: row.content,
+    caption: row.caption ?? undefined,
+    visibility: row.visibility,
+    authorName: row.author_name,
+    date: new Date(row.created_at).toLocaleDateString(),
+    timestamp: new Date(row.created_at).getTime(),
+  };
+}
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
-  const [memories, setMemories] = useState<Memory[]>(INITIAL_MEMORIES);
+  const { user } = useAuth();
+  const [memories, setMemories] = useState<Memory[]>([]);
+  const [rawPois, setRawPois] = useState<POI[]>([]);
+  const [loadingMemories, setLoadingMemories] = useState(true);
+  const [loadingPois, setLoadingPois] = useState(true);
+  const { coords, status: locationStatus, requestLocation } = useUserLocation();
 
-  const addMemory = (memoryData: Omit<Memory, "id" | "date" | "timestamp">) => {
-    const id = Math.random().toString(36).substring(2, 9);
-    const newMemory: Memory = {
-      ...memoryData,
-      id,
-      date: "Just now",
-      timestamp: Date.now(),
-    };
-    setMemories((prev) => [newMemory, ...prev]);
-    return id;
-  };
+  // Attractions are public — load once regardless of login state.
+  useEffect(() => {
+    (async () => {
+      const { data, error } = await supabase.from("attractions").select("*").order("name");
+      if (!error && data) setRawPois(data.map(mapAttractionRow));
+      setLoadingPois(false);
+    })();
+  }, []);
 
-  const deleteMemory = (id: string) => {
+  // Once we know the user's GPS position, figure out which country they're
+  // nearest to (closest attraction's country wins), then compute a real
+  // distance for every attraction in that country and sort nearest-first.
+  // Attractions from other countries are filtered out entirely — showing a
+  // UK attraction's "12,000 km away" to someone in Bahrain isn't useful.
+  const { pois, detectedCountryCode } = useMemo(() => {
+    if (!coords || rawPois.length === 0) {
+      return { pois: rawPois, detectedCountryCode: null as string | null };
+    }
+
+    const withDistance = rawPois.map((poi) => ({
+      ...poi,
+      distanceKm: distanceKm(coords.latitude, coords.longitude, poi.latitude, poi.longitude),
+    }));
+
+    const nearest = withDistance.reduce((closest, poi) =>
+      (poi.distanceKm ?? Infinity) < (closest.distanceKm ?? Infinity) ? poi : closest,
+    );
+    const countryCode = nearest.countryCode;
+
+    const sameCountry = withDistance
+      .filter((poi) => poi.countryCode === countryCode)
+      .sort((a, b) => (a.distanceKm ?? Infinity) - (b.distanceKm ?? Infinity))
+      .map((poi) => ({ ...poi, distance: formatDistance(poi.distanceKm ?? 0) }));
+
+    return { pois: sameCountry, detectedCountryCode: countryCode };
+  }, [coords, rawPois]);
+
+  // Memories are private per user — reload whenever login state changes.
+  useEffect(() => {
+    if (!user) {
+      setMemories([]);
+      setLoadingMemories(false);
+      return;
+    }
+    setLoadingMemories(true);
+    (async () => {
+      const { data, error } = await supabase
+        .from("memories")
+        .select("*")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false });
+      if (!error && data) setMemories(data.map(mapMemoryRow));
+      setLoadingMemories(false);
+    })();
+  }, [user]);
+
+  const addMemory = useCallback(
+    async (
+      memoryData: Omit<Memory, "id" | "date" | "timestamp" | "userId" | "authorName">,
+    ) => {
+      if (!user) return null;
+      const authorName =
+        (user.user_metadata?.full_name as string | undefined) || user.email || "Explorer";
+      const { data, error } = await supabase
+        .from("memories")
+        .insert({
+          user_id: user.id,
+          poi_id: memoryData.poiId,
+          poi_name: memoryData.poiName,
+          type: memoryData.type,
+          content: memoryData.content,
+          caption: memoryData.caption ?? null,
+          visibility: memoryData.visibility,
+          author_name: authorName,
+        })
+        .select()
+        .single();
+
+      if (error || !data) {
+        console.error("Failed to save memory:", error);
+        return null;
+      }
+      setMemories((prev) => [mapMemoryRow(data), ...prev]);
+      return data.id as string;
+    },
+    [user],
+  );
+
+  const deleteMemory = useCallback(async (id: string) => {
+    const { error } = await supabase.from("memories").delete().eq("id", id);
+    if (error) {
+      console.error("Failed to delete memory:", error);
+      return;
+    }
     setMemories((prev) => prev.filter((m) => m.id !== id));
-  };
+  }, []);
 
-  const getMemoriesByPOI = (poiId: string) => {
-    return memories.filter((m) => m.poiId === poiId);
-  };
+  const updateMemoryVisibility = useCallback(
+    async (id: string, visibility: "public" | "private") => {
+      const { error } = await supabase.from("memories").update({ visibility }).eq("id", id);
+      if (error) {
+        console.error("Failed to update memory visibility:", error);
+        return false;
+      }
+      setMemories((prev) => prev.map((m) => (m.id === id ? { ...m, visibility } : m)));
+      return true;
+    },
+    [],
+  );
+
+  // "My Memories" screen — only what THIS account owns, private or public.
+  const getMemoriesByPOI = useCallback(
+    (poiId: string) => memories.filter((m) => m.poiId === poiId),
+    [memories],
+  );
+
+  // POI detail screen — a live query, not the cached `memories` list, since
+  // it needs to include OTHER users' public memories too. RLS automatically
+  // restricts the result to: rows you own, plus rows anyone marked public.
+  const fetchMemoriesForPOI = useCallback(async (poiId: string) => {
+    const { data, error } = await supabase
+      .from("memories")
+      .select("*")
+      .eq("poi_id", poiId)
+      .order("created_at", { ascending: false });
+    if (error || !data) {
+      console.error("Failed to load memories for POI:", error);
+      return [];
+    }
+    return data.map(mapMemoryRow);
+  }, []);
+
+  // Real running visitor counter. Call once per POI-detail-screen view.
+  const incrementViews = useCallback(async (poiId: string) => {
+    const { error } = await supabase.rpc("increment_attraction_views", {
+      attraction_id: poiId,
+    });
+    if (error) {
+      console.error("Failed to increment views:", error);
+      return;
+    }
+    setRawPois((prev) =>
+      prev.map((p) => (p.id === poiId ? { ...p, views: p.views + 1 } : p)),
+    );
+  }, []);
 
   return (
     <AppContext.Provider
-      value={{ memories, addMemory, deleteMemory, getMemoriesByPOI }}
+      value={{
+        memories,
+        pois,
+        loadingMemories,
+        loadingPois,
+        addMemory,
+        deleteMemory,
+        updateMemoryVisibility,
+        getMemoriesByPOI,
+        fetchMemoriesForPOI,
+        incrementViews,
+        locationStatus,
+        requestLocation,
+        detectedCountryCode,
+      }}
     >
       {children}
     </AppContext.Provider>
@@ -77,10 +257,21 @@ export const useApp = () => {
   return context;
 };
 
+function RouterWithMotionConfig() {
+  const { effectiveReduceMotion } = useAccessibility();
+  return (
+    <MotionConfig reducedMotion={effectiveReduceMotion ? "always" : "user"}>
+      <RouterProvider router={router} />
+    </MotionConfig>
+  );
+}
+
 export default function App() {
   return (
-    <AppProvider>
-      <RouterProvider router={router} />
-    </AppProvider>
+    <AuthProvider>
+      <AppProvider>
+        <RouterWithMotionConfig />
+      </AppProvider>
+    </AuthProvider>
   );
 }

@@ -1,0 +1,6 @@
+.env
+node_modules/
+dist/
+
+# Spartan AI config (contains API keys)
+.spartan/ai.env

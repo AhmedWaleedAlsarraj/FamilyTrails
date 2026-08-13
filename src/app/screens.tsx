@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import { Outlet, useNavigate, useParams } from "react-router-dom";
+import React, { useState, useEffect } from "react";
+import { Outlet, useNavigate, useParams, useLocation } from "react-router-dom";
 import { MoreVertical, Trash2 } from "lucide-react";
 import {
   DropdownMenu,
@@ -19,21 +19,66 @@ import {
   Ruler,
   Camera,
   Video,
-  Mic,
   FileText,
   X,
   CheckCircle2,
-  Square,
   Compass,
   Share2,
   Eye,
+  Pencil,
 } from "lucide-react";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import { ImageWithFallback } from "./components/FamilyTrails/ImageWithFallback";
-import { POIS } from "./data/poi";
 import { BottomNav } from "./components/BottomNav";
 import { useApp } from "./App";
+import { useAuth } from "./context/AuthContext";
+import { uploadMemoryFile } from "./lib/uploadMemoryFile";
+import type { Memory } from "./data/poi";
+
+// Shared required Public/Private picker used across every add-memory screen.
+// `value` is null until the user picks one — screens use that to disable Save.
+export function VisibilityPicker({
+  value,
+  onChange,
+}: {
+  value: "public" | "private" | null;
+  onChange: (v: "public" | "private") => void;
+}) {
+  return (
+    <div className="mb-4">
+      <label className="text-xs text-gray-500 mb-2 block font-medium">
+        Who can see this memory? *
+      </label>
+      <div className="grid grid-cols-2 gap-3">
+        <button
+          type="button"
+          onClick={() => onChange("private")}
+          className={cn(
+            "py-3 rounded-2xl font-bold text-sm border-2 transition-colors",
+            value === "private"
+              ? "border-[#2E5C8A] bg-[#2E5C8A]/5 text-[#2E5C8A]"
+              : "border-gray-200 text-gray-500",
+          )}
+        >
+          Private — just me
+        </button>
+        <button
+          type="button"
+          onClick={() => onChange("public")}
+          className={cn(
+            "py-3 rounded-2xl font-bold text-sm border-2 transition-colors",
+            value === "public"
+              ? "border-[#2E5C8A] bg-[#2E5C8A]/5 text-[#2E5C8A]"
+              : "border-gray-200 text-gray-500",
+          )}
+        >
+          Public — everyone
+        </button>
+      </div>
+    </div>
+  );
+}
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -87,21 +132,39 @@ const handleSharePOI = (poi: { name: string; id: string }) => {
 };
 
 export const Layout = () => {
+  const location = useLocation();
+  const authRoutes = [
+    "/login",
+    "/signup",
+    "/forgot-password",
+    "/reset-password",
+  ];
+  const hideNav = authRoutes.includes(location.pathname);
+
   return (
     <div className="flex flex-col h-screen w-screen max-w-[430px] mx-auto bg-[#F8F9FA] relative shadow-2xl overflow-hidden">
-      <main className="flex-1 w-full overflow-y-auto overflow-x-hidden pb-[100px]">
+      <main
+        className={cn(
+          "flex-1 w-full overflow-y-auto overflow-x-hidden",
+          !hideNav && "pb-[100px]",
+        )}
+      >
         <Outlet />
       </main>
-      <div className="w-full shrink-0 sticky bottom-0 z-50">
-        <BottomNav />
-      </div>
+      {!hideNav && (
+        <div className="w-full shrink-0 sticky bottom-0 z-50">
+          <BottomNav />
+        </div>
+      )}
     </div>
   );
 };
 
 export const HomeScreen = () => {
   const navigate = useNavigate();
-  const featured = POIS.slice(0, 3);
+  const { pois, locationStatus, requestLocation, detectedCountryCode } =
+    useApp();
+  const featured = pois.slice(0, 3);
   return (
     <div className="flex flex-col min-h-full pb-6">
       <header className="bg-[#2E5C8A] pt-4 pb-12 px-5 flex items-center justify-between text-white relative">
@@ -109,7 +172,7 @@ export const HomeScreen = () => {
           <MapPin className="w-5 h-5" />
           <h1 className="text-xl font-bold tracking-tight">FamilyTrails</h1>
         </div>
-        <button className="p-2 bg-white/10 rounded-full">
+        <button aria-label="Notifications" className="p-2 bg-white/10 rounded-full">
           <Bell className="w-5 h-5" />
         </button>
       </header>
@@ -121,9 +184,48 @@ export const HomeScreen = () => {
         </div>
       </div>
 
+      {/* Location prompt: only shown until the user grants/denies once. */}
+      {(locationStatus === "idle" || locationStatus === "requesting") && (
+        <div className="px-5 mt-4">
+          <button
+            onClick={requestLocation}
+            disabled={locationStatus === "requesting"}
+            className="w-full bg-white border-2 border-[#2E5C8A] text-[#2E5C8A] p-4 rounded-2xl flex items-center gap-3 shadow-sm disabled:opacity-60"
+          >
+            <MapPin className="w-5 h-5 shrink-0" />
+            <span className="text-sm font-semibold text-left">
+              {locationStatus === "requesting"
+                ? "Finding your location..."
+                : "Use my location to find nearby attractions"}
+            </span>
+          </button>
+        </div>
+      )}
+      {locationStatus === "denied" && (
+        <div className="px-5 mt-4">
+          <div className="w-full bg-amber-50 border border-amber-200 text-amber-800 p-4 rounded-2xl text-sm">
+            Location access was denied — showing all attractions instead of
+            sorting by distance. You can enable location in your browser or
+            device settings and reload if you'd like nearby sorting.
+          </div>
+        </div>
+      )}
+      {locationStatus === "unavailable" && (
+        <div className="px-5 mt-4">
+          <div className="w-full bg-gray-50 border border-gray-200 text-gray-600 p-4 rounded-2xl text-sm">
+            Location isn't available on this device/browser — showing all
+            attractions.
+          </div>
+        </div>
+      )}
+
       <section className="mt-8">
         <div className="px-5 flex items-center justify-between mb-4">
-          <h3 className="text-lg font-bold text-black">Nearby Attractions</h3>
+          <h3 className="text-lg font-bold text-black">
+            {detectedCountryCode
+              ? "Nearby Attractions"
+              : "Featured Attractions"}
+          </h3>
           <button
             onClick={() => navigate("/explore")}
             className="text-sm font-semibold text-[#FF6B35]"
@@ -159,7 +261,11 @@ export const HomeScreen = () => {
                 <div className="flex items-center justify-between mb-1">
                   <div className="flex items-center gap-1.5 text-gray-500">
                     <MapPin className="w-3.5 h-3.5" />
-                    <span className="text-xs">{poi.distance} away</span>
+                    <span className="text-xs">
+                      {poi.distanceKm !== null
+                        ? `${poi.distance} away`
+                        : poi.location}
+                    </span>
                   </div>
                   <div className="flex items-center gap-3">
                     <div className="flex items-center gap-1 text-gray-400">
@@ -171,6 +277,7 @@ export const HomeScreen = () => {
                         e.stopPropagation();
                         handleSharePOI(poi);
                       }}
+                      aria-label={`Share ${poi.name}`}
                       className="p-1.5 bg-gray-100 hover:bg-gray-200 rounded-full transition-colors"
                     >
                       <Share2 className="w-3.5 h-3.5 text-[#2E5C8A]" />
@@ -211,6 +318,7 @@ export const HomeScreen = () => {
 
 export const ExploreScreen = () => {
   const navigate = useNavigate();
+  const { pois } = useApp();
   const [activeFilter, setActiveFilter] = useState("All");
   const [searchQuery, setSearchQuery] = useState("");
   const filters = [
@@ -221,7 +329,7 @@ export const ExploreScreen = () => {
     "Historic Site",
   ];
 
-  const filteredPOIs = POIS.filter((poi) => {
+  const filteredPOIs = pois.filter((poi) => {
     const matchesFilter =
       activeFilter === "All" || poi.category === activeFilter;
     const matchesSearch = poi.name
@@ -234,7 +342,7 @@ export const ExploreScreen = () => {
     <div className="flex flex-col min-h-full bg-white">
       <header className="bg-[#2E5C8A] pt-4 pb-6 px-5 text-white shrink-0">
         <div className="flex items-center gap-4 mb-4">
-          <button onClick={() => navigate(-1)} className="p-1">
+          <button onClick={() => navigate(-1)} aria-label="Go back" className="p-1">
             <ArrowLeft className="w-6 h-6" />
           </button>
           <h1 className="text-xl font-bold">Explore Bahrain</h1>
@@ -293,6 +401,7 @@ export const ExploreScreen = () => {
                       e.stopPropagation();
                       handleSharePOI(poi);
                     }}
+                    aria-label={`Share ${poi.name}`}
                     className="p-1.5 bg-gray-100 hover:bg-gray-200 rounded-full transition-colors"
                   >
                     <Share2 className="w-3.5 h-3.5 text-[#2E5C8A]" />
@@ -305,7 +414,7 @@ export const ExploreScreen = () => {
                   {poi.category}
                 </span>
                 <span className="text-[11px] text-gray-400">
-                  {poi.distance}
+                  {poi.distanceKm !== null ? poi.distance : poi.location}
                 </span>
                 <div className="flex items-center gap-1 text-gray-400">
                   <Eye className="w-3 h-3" />
@@ -323,10 +432,39 @@ export const ExploreScreen = () => {
 export const POIDetailScreen = () => {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { getMemoriesByPOI, deleteMemory } = useApp();
-  const poi = POIS.find((p) => p.id === id);
-  const memories = getMemoriesByPOI(id || "");
+  const { pois, deleteMemory, incrementViews, fetchMemoriesForPOI } = useApp();
+  const { user } = useAuth();
+  const poi = pois.find((p) => p.id === id);
+  const [memories, setMemories] = useState<Memory[]>([]);
+  const [loadingMemories, setLoadingMemories] = useState(true);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const hasCountedView = React.useRef<string | null>(null);
+
+  // Live per-POI fetch — includes this account's own memories AND anyone
+  // else's memories marked public for this attraction. Refetches whenever
+  // the POI changes, and again right after this account adds a new memory
+  // (see reloadMemories below), so a fresh public post shows immediately.
+  const reloadMemories = React.useCallback(async () => {
+    if (!id) return;
+    setLoadingMemories(true);
+    const data = await fetchMemoriesForPOI(id);
+    setMemories(data);
+    setLoadingMemories(false);
+  }, [id, fetchMemoriesForPOI]);
+
+  useEffect(() => {
+    reloadMemories();
+  }, [reloadMemories]);
+
+  // Real visitor counter: fires once per screen visit, even under
+  // React StrictMode's dev-mode double-effect behaviour.
+  useEffect(() => {
+    if (id && hasCountedView.current !== id) {
+      hasCountedView.current = id;
+      incrementViews(id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
 
   if (!poi) return null;
 
@@ -384,12 +522,14 @@ export const POIDetailScreen = () => {
         <div className="absolute top-4 left-0 right-0 flex items-center justify-between px-5">
           <button
             onClick={() => navigate(-1)}
+            aria-label="Go back"
             className="p-2.5 bg-white/20 backdrop-blur-md rounded-full text-white"
           >
             <ArrowLeft className="w-6 h-6" />
           </button>
           <button
             onClick={handleShare}
+            aria-label={`Share ${poi.name}`}
             className="p-2.5 bg-white/20 backdrop-blur-md rounded-full text-white"
           >
             <Share2 className="w-6 h-6" />
@@ -471,7 +611,13 @@ export const POIDetailScreen = () => {
           </motion.button>
         </div>
 
-        {memories.length > 0 && (
+        {loadingMemories && (
+          <p className="text-sm text-gray-400 text-center py-4">
+            Loading memories...
+          </p>
+        )}
+
+        {!loadingMemories && memories.length > 0 && (
           <>
             <h2 className="text-lg font-bold text-black mb-4 px-1">
               Family Memories Here
@@ -484,34 +630,51 @@ export const POIDetailScreen = () => {
                 >
                   <div className="flex items-center gap-3 mb-3">
                     <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#2E5C8A] to-[#4A7BA7] flex items-center justify-center font-bold text-xs text-white">
-                      FT
+                      {m.authorName.charAt(0).toUpperCase()}
                     </div>
-                    <span className="text-xs font-bold">Explorer</span>
-                    <span className="text-[10px] text-gray-400 flex-1">
+                    <span className="text-xs font-bold">{m.authorName}</span>
+                    <span
+                      className={cn(
+                        "text-[9px] font-bold px-1.5 py-0.5 rounded-full",
+                        m.visibility === "public"
+                          ? "bg-green-50 text-green-700"
+                          : "bg-gray-100 text-gray-500",
+                      )}
+                    >
+                      {m.visibility === "public" ? "Public" : "Private"}
+                    </span>
+                    <span className="text-[10px] text-gray-400 flex-1 text-right">
                       {m.date}
                     </span>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <button className="p-1.5 bg-gray-100 hover:bg-gray-200 rounded-full transition-colors">
-                          <MoreVertical className="w-4 h-4 text-gray-500" />
-                        </button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent
-                        align="end"
-                        className="w-40 bg-white shadow-lg border border-gray-200 rounded-xl p-1"
-                      >
-                        <DropdownMenuItem
-                          onClick={() => {
-                            if (window.confirm("Delete this memory?"))
-                              deleteMemory(m.id);
-                          }}
-                          className="flex items-center gap-2 px-3 py-2 text-red-600 font-semibold text-sm bg-white hover:bg-red-50 rounded-lg cursor-pointer"
+                    {m.userId === user?.id && (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button
+                            aria-label="Memory options"
+                            className="p-1.5 bg-gray-100 hover:bg-gray-200 rounded-full transition-colors"
+                          >
+                            <MoreVertical className="w-4 h-4 text-gray-500" />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent
+                          align="end"
+                          className="w-40 bg-white shadow-lg border border-gray-200 rounded-xl p-1"
                         >
-                          <Trash2 className="w-4 h-4" />
-                          Delete
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
+                          <DropdownMenuItem
+                            onClick={async () => {
+                              if (window.confirm("Delete this memory?")) {
+                                await deleteMemory(m.id);
+                                reloadMemories();
+                              }
+                            }}
+                            className="flex items-center gap-2 px-3 py-2 text-red-600 font-semibold text-sm bg-white hover:bg-red-50 rounded-lg cursor-pointer"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                            Delete
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    )}
                   </div>
                   {m.type === "photo" && m.content && (
                     <div
@@ -534,13 +697,11 @@ export const POIDetailScreen = () => {
                   )}
                   {m.caption && (
                     <p className="text-sm text-gray-600 italic mt-2">
-                      "{m.caption}"
+                      {m.caption}
                     </p>
                   )}
                   {m.type === "text" && (
-                    <p className="text-sm text-gray-600 italic">
-                      "{m.content}"
-                    </p>
+                    <p className="text-sm text-gray-600 italic">{m.content}</p>
                   )}
                 </div>
               ))}
@@ -560,6 +721,7 @@ export const POIDetailScreen = () => {
           >
             <button
               onClick={() => setSelectedImage(null)}
+              aria-label="Close image"
               className="absolute top-4 right-4 p-2 bg-white/20 rounded-full text-white"
             >
               <X className="w-6 h-6" />
@@ -579,7 +741,8 @@ export const POIDetailScreen = () => {
 export const AddMemorySelectionScreen = () => {
   const { id } = useParams();
   const navigate = useNavigate();
-  const poi = POIS.find((p) => p.id === id);
+  const { pois } = useApp();
+  const poi = pois.find((p) => p.id === id);
   if (!poi) return null;
 
   const types = [
@@ -606,11 +769,11 @@ export const AddMemorySelectionScreen = () => {
   return (
     <div className="flex flex-col min-h-full bg-white px-5 pb-6">
       <header className="flex items-center justify-between py-6 shrink-0">
-        <button onClick={() => navigate(-1)}>
+        <button onClick={() => navigate(-1)} aria-label="Go back">
           <ArrowLeft />
         </button>
         <h1 className="text-xl font-bold">Add Memory</h1>
-        <button onClick={() => navigate(`/poi/${id}`)}>
+        <button onClick={() => navigate(`/poi/${id}`)} aria-label="Cancel and close">
           <X />
         </button>
       </header>
@@ -650,27 +813,45 @@ export const AddMemorySelectionScreen = () => {
 export const PhotoAttachmentScreen = () => {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { addMemory } = useApp();
-  const poi = POIS.find((p) => p.id === id);
+  const { pois, addMemory } = useApp();
+  const { user } = useAuth();
+  const poi = pois.find((p) => p.id === id);
   const [photo, setPhoto] = useState<string | null>(null);
+  const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [caption, setCaption] = useState("");
+  const [visibility, setVisibility] = useState<"public" | "private" | null>(
+    null,
+  );
+  const [saving, setSaving] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
 
-  const handleSave = () => {
-    if (!photo || !poi) return;
-    addMemory({
-      poiId: poi.id,
-      poiName: poi.name,
-      type: "photo",
-      content: photo,
-      caption,
-    });
-    navigate(`/success/${poi.id}/photo`);
+  const handleSave = async () => {
+    if (!photoFile || !poi || !user || !visibility) return;
+    setSaving(true);
+    setUploadError(null);
+    try {
+      const url = await uploadMemoryFile(user.id, poi.id, photoFile);
+      const savedId = await addMemory({
+        poiId: poi.id,
+        poiName: poi.name,
+        type: "photo",
+        content: url,
+        caption,
+        visibility,
+      });
+      if (!savedId) throw new Error("Could not save memory");
+      navigate(`/success/${poi.id}/photo`);
+    } catch (err) {
+      setUploadError("Upload failed. Check your connection and try again.");
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
     <div className="flex flex-col min-h-full bg-white px-5 pb-6">
       <header className="flex items-center justify-between py-6 shrink-0">
-        <button onClick={() => navigate(-1)}>
+        <button onClick={() => navigate(-1)} aria-label="Go back">
           <ArrowLeft />
         </button>
         <h1 className="text-xl font-bold">Add Photo</h1>
@@ -708,7 +889,10 @@ export const PhotoAttachmentScreen = () => {
         id="photo-input"
         onChange={(e) => {
           const file = e.target.files?.[0];
-          if (file) setPhoto(URL.createObjectURL(file));
+          if (file) {
+            setPhotoFile(file);
+            setPhoto(URL.createObjectURL(file));
+          }
         }}
       />
       <div className="grid grid-cols-2 gap-4 mb-6">
@@ -756,6 +940,14 @@ export const PhotoAttachmentScreen = () => {
         </div>
       </div>
 
+      <VisibilityPicker value={visibility} onChange={setVisibility} />
+
+      {uploadError && (
+        <div className="text-xs text-red-500 text-center mb-4">
+          {uploadError}
+        </div>
+      )}
+
       <div className="flex gap-4 mt-auto">
         <button
           onClick={() => navigate(-1)}
@@ -765,15 +957,15 @@ export const PhotoAttachmentScreen = () => {
         </button>
         <button
           onClick={handleSave}
-          disabled={!photo}
+          disabled={!photo || !visibility || saving}
           className={cn(
             "flex-1 py-4 rounded-2xl font-bold transition-all",
-            photo
+            photo && visibility && !saving
               ? "bg-[#2E5C8A] text-white shadow-md"
               : "bg-gray-100 text-gray-400",
           )}
         >
-          Save Memory
+          {saving ? "Saving..." : "Save Memory"}
         </button>
       </div>
     </div>
@@ -783,27 +975,45 @@ export const PhotoAttachmentScreen = () => {
 export const VideoAttachmentScreen = () => {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { addMemory } = useApp();
-  const poi = POIS.find((p) => p.id === id);
+  const { pois, addMemory } = useApp();
+  const { user } = useAuth();
+  const poi = pois.find((p) => p.id === id);
   const [video, setVideo] = useState<string | null>(null);
+  const [videoFile, setVideoFile] = useState<File | null>(null);
   const [caption, setCaption] = useState("");
+  const [visibility, setVisibility] = useState<"public" | "private" | null>(
+    null,
+  );
+  const [saving, setSaving] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
 
-  const handleSave = () => {
-    if (!video || !poi) return;
-    addMemory({
-      poiId: poi.id,
-      poiName: poi.name,
-      type: "video",
-      content: video,
-      caption,
-    });
-    navigate(`/success/${poi.id}/video`);
+  const handleSave = async () => {
+    if (!videoFile || !poi || !user || !visibility) return;
+    setSaving(true);
+    setUploadError(null);
+    try {
+      const url = await uploadMemoryFile(user.id, poi.id, videoFile);
+      const savedId = await addMemory({
+        poiId: poi.id,
+        poiName: poi.name,
+        type: "video",
+        content: url,
+        caption,
+        visibility,
+      });
+      if (!savedId) throw new Error("Could not save memory");
+      navigate(`/success/${poi.id}/video`);
+    } catch (err) {
+      setUploadError("Upload failed. Check your connection and try again.");
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
     <div className="flex flex-col min-h-full bg-white px-5 pb-6">
       <header className="flex items-center justify-between py-6 shrink-0">
-        <button onClick={() => navigate(-1)}>
+        <button onClick={() => navigate(-1)} aria-label="Go back">
           <ArrowLeft />
         </button>
         <h1 className="text-xl font-bold">Add Video</h1>
@@ -841,7 +1051,10 @@ export const VideoAttachmentScreen = () => {
         id="video-input"
         onChange={(e) => {
           const file = e.target.files?.[0];
-          if (file) setVideo(URL.createObjectURL(file));
+          if (file) {
+            setVideoFile(file);
+            setVideo(URL.createObjectURL(file));
+          }
         }}
       />
       <div className="grid grid-cols-2 gap-4 mb-6">
@@ -889,6 +1102,14 @@ export const VideoAttachmentScreen = () => {
         </div>
       </div>
 
+      <VisibilityPicker value={visibility} onChange={setVisibility} />
+
+      {uploadError && (
+        <div className="text-xs text-red-500 text-center mb-4">
+          {uploadError}
+        </div>
+      )}
+
       <div className="flex gap-4 mt-auto">
         <button
           onClick={() => navigate(-1)}
@@ -898,130 +1119,15 @@ export const VideoAttachmentScreen = () => {
         </button>
         <button
           onClick={handleSave}
-          disabled={!video}
+          disabled={!video || !visibility || saving}
           className={cn(
             "flex-1 py-4 rounded-2xl font-bold transition-all",
-            video
+            video && visibility && !saving
               ? "bg-[#2E5C8A] text-white shadow-md"
               : "bg-gray-100 text-gray-400",
           )}
         >
-          Save Memory
-        </button>
-      </div>
-    </div>
-  );
-};
-
-export const AudioRecordingScreen = () => {
-  const { id } = useParams();
-  const navigate = useNavigate();
-  const { addMemory } = useApp();
-  const poi = POIS.find((p) => p.id === id);
-  const [status, setStatus] = useState<"idle" | "recording" | "complete">(
-    "idle",
-  );
-  const [caption, setCaption] = useState("");
-
-  const handleSave = () => {
-    if (!poi || status === "idle") return;
-    addMemory({
-      poiId: poi.id,
-      poiName: poi.name,
-      type: "audio",
-      content: "audio_recording",
-      caption,
-    });
-    navigate(`/success/${poi.id}/audio`);
-  };
-
-  return (
-    <div className="flex flex-col min-h-full bg-white px-5 pb-6">
-      <header className="flex items-center justify-between py-6 shrink-0">
-        <button onClick={() => navigate(-1)}>
-          <ArrowLeft />
-        </button>
-        <h1 className="text-xl font-bold">Record Audio</h1>
-        <div className="w-6" />
-      </header>
-
-      <div className="text-center text-xs text-gray-400 mb-6">{poi?.name}</div>
-
-      <div className="flex-1 flex flex-col items-center justify-center py-8">
-        <div
-          className={cn(
-            "w-40 h-40 rounded-full flex items-center justify-center mb-8 transition-all",
-            status === "recording"
-              ? "bg-red-50 text-red-500 animate-pulse"
-              : "bg-blue-50 text-[#2E5C8A]",
-          )}
-        >
-          <Mic className="w-16 h-16" />
-        </div>
-        <p className="text-lg font-bold mb-2 text-gray-800">
-          {status === "idle" && "Ready to Record"}
-          {status === "recording" && "Recording..."}
-          {status === "complete" && "Recording Complete"}
-        </p>
-        <p className="text-3xl font-mono mb-12 text-gray-600 font-bold">
-          {status === "recording" ? "0:15" : "0:00"}
-        </p>
-        <button
-          onClick={() =>
-            setStatus(status === "recording" ? "complete" : "recording")
-          }
-          className={cn(
-            "w-20 h-20 rounded-full shadow-xl flex items-center justify-center transition-all",
-            status === "recording"
-              ? "bg-[#2E5C8A] text-white"
-              : "bg-red-500 text-white",
-          )}
-        >
-          {status === "recording" ? (
-            <Square className="w-8 h-8 fill-current" />
-          ) : (
-            <div className="w-7 h-7 rounded-full border-[5px] border-white" />
-          )}
-        </button>
-      </div>
-
-      {status === "complete" && (
-        <div className="mb-6">
-          <label className="text-xs text-gray-500 mb-2 block font-medium">
-            Add a note (optional)
-          </label>
-          <textarea
-            placeholder="Add context..."
-            value={caption}
-            onChange={(e) => setCaption(e.target.value)}
-            maxLength={200}
-            className="w-full bg-gray-50 p-4 rounded-2xl text-sm border border-gray-200 focus:ring-2 focus:ring-[#2E5C8A] outline-none resize-none"
-            rows={2}
-          />
-          <div className="text-xs text-gray-400 text-right mt-1">
-            {caption.length}/200
-          </div>
-        </div>
-      )}
-
-      <div className="flex gap-4">
-        <button
-          onClick={() => navigate(-1)}
-          className="flex-1 py-4 rounded-2xl font-bold text-gray-600 border border-gray-300 hover:bg-gray-50 transition-colors"
-        >
-          Cancel
-        </button>
-        <button
-          onClick={handleSave}
-          disabled={status === "idle"}
-          className={cn(
-            "flex-1 py-4 rounded-2xl font-bold transition-all",
-            status !== "idle"
-              ? "bg-[#2E5C8A] text-white shadow-md"
-              : "bg-gray-100 text-gray-400",
-          )}
-        >
-          Save Audio
+          {saving ? "Saving..." : "Save Memory"}
         </button>
       </div>
     </div>
@@ -1031,25 +1137,33 @@ export const AudioRecordingScreen = () => {
 export const TextNoteScreen = () => {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { addMemory } = useApp();
-  const poi = POIS.find((p) => p.id === id);
+  const { pois, addMemory } = useApp();
+  const poi = pois.find((p) => p.id === id);
   const [text, setText] = useState("");
+  const [visibility, setVisibility] = useState<"public" | "private" | null>(
+    null,
+  );
+  const [saving, setSaving] = useState(false);
 
-  const handleSave = () => {
-    if (!poi || !text) return;
-    addMemory({
+  const handleSave = async () => {
+    if (!poi || !text || !visibility) return;
+    setSaving(true);
+    const savedId = await addMemory({
       poiId: poi.id,
       poiName: poi.name,
       type: "text",
       content: text,
+      visibility,
     });
+    setSaving(false);
+    if (!savedId) return;
     navigate(`/success/${poi.id}/text`);
   };
 
   return (
     <div className="flex flex-col min-h-full bg-white px-5 pb-6">
       <header className="flex items-center justify-between py-6 shrink-0">
-        <button onClick={() => navigate(-1)}>
+        <button onClick={() => navigate(-1)} aria-label="Go back">
           <ArrowLeft />
         </button>
         <h1 className="text-xl font-bold">Write Note</h1>
@@ -1067,9 +1181,11 @@ export const TextNoteScreen = () => {
         className="flex-1 bg-gray-50 p-6 rounded-3xl text-base outline-none border border-gray-200 focus:ring-2 focus:ring-[#2E5C8A] resize-none min-h-[350px]"
       />
 
-      <div className="text-xs text-gray-400 text-right mb-6 mt-2">
+      <div className="text-xs text-gray-400 text-right mb-2 mt-2">
         {text.length}/500
       </div>
+
+      <VisibilityPicker value={visibility} onChange={setVisibility} />
 
       <div className="flex gap-4">
         <button
@@ -1080,15 +1196,15 @@ export const TextNoteScreen = () => {
         </button>
         <button
           onClick={handleSave}
-          disabled={!text}
+          disabled={!text || !visibility || saving}
           className={cn(
             "flex-1 py-4 rounded-2xl font-bold transition-all",
-            text
+            text && visibility && !saving
               ? "bg-[#2E5C8A] text-white shadow-md"
               : "bg-gray-100 text-gray-400",
           )}
         >
-          Save Note
+          {saving ? "Saving..." : "Save Note"}
         </button>
       </div>
     </div>
@@ -1098,7 +1214,8 @@ export const TextNoteScreen = () => {
 export const SuccessScreen = () => {
   const { id, type } = useParams();
   const navigate = useNavigate();
-  const poi = POIS.find((p) => p.id === id);
+  const { pois } = useApp();
+  const poi = pois.find((p) => p.id === id);
 
   return (
     <div className="flex flex-col items-center justify-center min-h-full bg-white px-8 text-center py-12">
@@ -1243,6 +1360,7 @@ export const MyMemoriesScreen = () => {
                 <DropdownMenuTrigger asChild>
                   <button
                     onClick={(e) => e.stopPropagation()}
+                    aria-label="Memory options"
                     className="p-2 bg-gray-100 hover:bg-gray-200 rounded-full transition-colors shrink-0"
                   >
                     <MoreVertical className="w-5 h-5 text-gray-500" />
@@ -1274,8 +1392,30 @@ export const MyMemoriesScreen = () => {
 
 export const ProfileScreen = () => {
   const { memories } = useApp();
+  const { user, signOut } = useAuth();
+  const navigate = useNavigate();
   const photoCount = memories.filter((m) => m.type === "photo").length;
   const totalPlaces = new Set(memories.map((m) => m.poiId)).size;
+
+  const displayName =
+    (user?.user_metadata?.full_name as string | undefined) ||
+    user?.email ||
+    "User";
+  const avatarUrl = user?.user_metadata?.avatar_url as string | undefined;
+  const initial = displayName.charAt(0).toUpperCase();
+  const isGuest = displayName.startsWith("guest-");
+
+  const menuItems = [
+    { label: "Privacy Settings", path: "/profile/privacy" },
+    { label: "Settings", path: "/profile/settings" },
+    { label: "Help & Support", path: "/profile/help" },
+    { label: "About FamilyTrails", path: "/profile/about" },
+  ];
+
+  const handleLogout = async () => {
+    await signOut();
+    navigate("/login");
+  };
 
   return (
     <div className="flex flex-col min-h-full bg-white">
@@ -1284,11 +1424,35 @@ export const ProfileScreen = () => {
       </header>
 
       <div className="flex flex-col items-center py-8 mb-6">
-        <div className="w-24 h-24 rounded-full bg-gradient-to-br from-[#2E5C8A] to-[#4A7BA7] flex items-center justify-center text-3xl font-black text-white mb-4 shadow-lg">
-          U
-        </div>
-        <h2 className="text-xl font-bold text-gray-900">User</h2>
-        <p className="text-sm text-gray-500 mt-1">Bahrain Explorer</p>
+        <button
+          onClick={() => navigate("/profile/edit")}
+          aria-label="Edit profile"
+          className="relative w-24 h-24 rounded-full mb-4 shadow-lg"
+        >
+          {avatarUrl ? (
+            <ImageWithFallback
+              src={avatarUrl}
+              alt=""
+              className="w-24 h-24 rounded-full object-cover"
+            />
+          ) : (
+            <div className="w-24 h-24 rounded-full bg-gradient-to-br from-[#2E5C8A] to-[#4A7BA7] flex items-center justify-center text-3xl font-black text-white">
+              {initial}
+            </div>
+          )}
+          <span className="absolute bottom-0 right-0 w-8 h-8 rounded-full bg-white border-2 border-[#2E5C8A] flex items-center justify-center">
+            <Pencil className="w-3.5 h-3.5 text-[#2E5C8A]" />
+          </span>
+        </button>
+        <button
+          onClick={() => navigate("/profile/edit")}
+          className="text-xl font-bold text-gray-900"
+        >
+          {displayName}
+        </button>
+        <p className="text-sm text-gray-500 mt-1">
+          {isGuest ? "Browsing as guest" : "Bahrain Explorer"}
+        </p>
       </div>
 
       <div className="grid grid-cols-3 gap-4 px-5 mb-8">
@@ -1309,21 +1473,20 @@ export const ProfileScreen = () => {
       </div>
 
       <div className="px-5 space-y-2 pb-8">
-        {[
-          "Privacy Settings",
-          "Notification Preferences",
-          "Help & Support",
-          "About FamilyTrails",
-        ].map((item) => (
+        {menuItems.map((item) => (
           <button
-            key={item}
+            key={item.label}
+            onClick={() => navigate(item.path)}
             className="w-full text-left p-4 bg-gray-50 rounded-2xl font-semibold text-gray-700 flex items-center justify-between hover:bg-gray-100 transition-colors"
           >
-            <span>{item}</span>
+            <span>{item.label}</span>
             <ChevronRight className="w-4 h-4 text-gray-400" />
           </button>
         ))}
-        <button className="w-full text-left p-4 bg-red-50 rounded-2xl font-semibold text-red-600 mt-4 hover:bg-red-100 transition-colors">
+        <button
+          onClick={handleLogout}
+          className="w-full text-left p-4 bg-red-50 rounded-2xl font-semibold text-red-600 mt-4 hover:bg-red-100 transition-colors"
+        >
           Log Out
         </button>
       </div>

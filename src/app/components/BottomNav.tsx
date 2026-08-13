@@ -28,6 +28,8 @@ export const BottomNav = () => {
           <button
             key={tab.path}
             onClick={() => navigate(tab.path)}
+            aria-label={tab.label}
+            aria-current={active ? "page" : undefined}
             className={clsx(
               "flex flex-col items-center p-2 min-w-[60px] transition-colors",
               active ? "text-[#2E5C8A]" : "text-gray-400",

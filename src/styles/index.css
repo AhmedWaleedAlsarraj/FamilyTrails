@@ -8,6 +8,14 @@
   box-sizing: border-box;
 }
 
+:root {
+  --font-size: 16px;
+}
+
+html {
+  font-size: var(--font-size);
+}
+
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
     'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
@@ -51,4 +59,51 @@ body {
 /* Ensure full width within container */
 main > * {
   width: 100%;
+}
+
+/**
+ * High contrast mode — the app's screens use fixed Tailwind gray utilities
+ * and arbitrary hex colors rather than CSS-variable design tokens, so
+ * contrast is boosted by targeting those utility classes directly.
+ */
+[data-contrast="high"] .text-gray-300,
+[data-contrast="high"] .text-gray-400,
+[data-contrast="high"] .text-gray-500 {
+  color: #333333 !important;
+}
+
+[data-contrast="high"] .text-gray-600 {
+  color: #1a1a1a !important;
+}
+
+[data-contrast="high"] .text-white\/80,
+[data-contrast="high"] .text-white\/70 {
+  color: #ffffff !important;
+}
+
+[data-contrast="high"] .border-gray-100,
+[data-contrast="high"] .border-gray-200 {
+  border-color: #000000 !important;
+}
+
+[data-contrast="high"] .bg-gray-50,
+[data-contrast="high"] .bg-gray-100 {
+  background-color: #ffffff !important;
+  border: 1px solid #000000 !important;
+}
+
+[data-contrast="high"] button:focus-visible,
+[data-contrast="high"] a:focus-visible {
+  outline: 3px solid #000000 !important;
+  outline-offset: 2px;
+}
+
+/**
+ * Reduce motion — belt-and-suspenders alongside MotionConfig's
+ * reducedMotion prop (which handles framer-motion animations). This catches
+ * any plain CSS transitions outside of motion/react components.
+ */
+[data-reduce-motion="true"] * {
+  transition-duration: 0.001ms !important;
+  animation-duration: 0.001ms !important;
 }
