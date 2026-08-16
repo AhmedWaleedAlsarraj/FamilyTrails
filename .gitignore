@@ -1,6 +1,8 @@
 .env
 node_modules/
 dist/
+dev-dist/
+.Rhistory
 
 # Spartan AI config (contains API keys)
 .spartan/ai.env
