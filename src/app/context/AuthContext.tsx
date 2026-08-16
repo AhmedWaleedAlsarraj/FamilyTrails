@@ -21,6 +21,7 @@ interface AuthContextType {
     avatarUrl?: string;
     defaultVisibility?: "public" | "private";
     notificationsEnabled?: boolean;
+    activeAvatarFrame?: string | null;
   }) => Promise<{ error: string | null }>;
   signOut: () => Promise<void>;
 }
@@ -94,12 +95,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     avatarUrl?: string;
     defaultVisibility?: "public" | "private";
     notificationsEnabled?: boolean;
+    activeAvatarFrame?: string | null;
   }) => {
     const data: Record<string, unknown> = {};
     if (updates.fullName !== undefined) data.full_name = updates.fullName;
     if (updates.avatarUrl !== undefined) data.avatar_url = updates.avatarUrl;
     if (updates.defaultVisibility !== undefined) data.default_visibility = updates.defaultVisibility;
     if (updates.notificationsEnabled !== undefined) data.notifications_enabled = updates.notificationsEnabled;
+    if (updates.activeAvatarFrame !== undefined) data.active_avatar_frame = updates.activeAvatarFrame;
 
     const { error } = await supabase.auth.updateUser({ data });
     return { error: error?.message ?? null };

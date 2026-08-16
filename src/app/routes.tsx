@@ -20,6 +20,8 @@ import {
   PrivacyScreen,
   HelpScreen,
   AboutScreen,
+  RewardsScreen,
+  UserProfileScreen,
 } from "./ProfileScreens";
 
 const basename = import.meta.env.PROD ? "/bh_app/" : "/";
@@ -33,6 +35,14 @@ export const router = createBrowserRouter(
         { index: true, Component: HomeScreen },
         { path: "explore", Component: ExploreScreen },
         { path: "poi/:id", Component: POIDetailScreen },
+        {
+          path: "user/:userId",
+          element: (
+            <RequireAuth>
+              <UserProfileScreen />
+            </RequireAuth>
+          ),
+        },
         { path: "login", Component: LoginScreen },
         { path: "signup", Component: SignupScreen },
         { path: "forgot-password", Component: ForgotPasswordScreen },
@@ -74,6 +84,14 @@ export const router = createBrowserRouter(
           element: (
             <RequireAuth>
               <PrivacyScreen />
+            </RequireAuth>
+          ),
+        },
+        {
+          path: "profile/rewards",
+          element: (
+            <RequireAuth>
+              <RewardsScreen />
             </RequireAuth>
           ),
         },

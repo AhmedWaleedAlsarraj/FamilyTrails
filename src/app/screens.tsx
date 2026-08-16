@@ -26,6 +26,7 @@ import {
   Share2,
   Eye,
   Pencil,
+  Coins,
 } from "lucide-react";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
@@ -33,7 +34,10 @@ import { ImageWithFallback } from "./components/FamilyTrails/ImageWithFallback";
 import { BottomNav } from "./components/BottomNav";
 import { useApp } from "./App";
 import { useAuth } from "./context/AuthContext";
+import { useRewards } from "./context/RewardsContext";
 import { uploadMemoryFile } from "./lib/uploadMemoryFile";
+import { fetchProfiles, type PublicProfile } from "./lib/fetchProfile";
+import { FRAME_RING_STYLES, badgeIcon } from "./lib/rewardVisuals";
 import type { Memory } from "./data/poi";
 
 // Shared required Public/Private picker used across every add-memory screen.
@@ -438,7 +442,16 @@ export const POIDetailScreen = () => {
   const [memories, setMemories] = useState<Memory[]>([]);
   const [loadingMemories, setLoadingMemories] = useState(true);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [authorProfiles, setAuthorProfiles] = useState<Record<string, PublicProfile>>({});
   const hasCountedView = React.useRef<string | null>(null);
+
+  // Real avatar/frame for whoever left each memory — batch-fetched so a POI
+  // with many memories from different people doesn't fire N queries.
+  useEffect(() => {
+    const userIds = [...new Set(memories.map((m) => m.userId))];
+    if (userIds.length === 0) return;
+    fetchProfiles(userIds).then(setAuthorProfiles);
+  }, [memories]);
 
   // Live per-POI fetch — includes this account's own memories AND anyone
   // else's memories marked public for this attraction. Refetches whenever
@@ -623,16 +636,47 @@ export const POIDetailScreen = () => {
               Family Memories Here
             </h2>
             <div className="space-y-4 mb-6">
-              {memories.map((m) => (
+              {memories.map((m) => {
+                // The live profile wins over the authorName snapshot stored on
+                // the memory row, so a rename or a new photo updates every
+                // memory that account has ever posted.
+                const author = authorProfiles[m.userId];
+                const authorName = author?.fullName || m.authorName;
+                const authorFrameClass = author?.activeAvatarFrame
+                  ? FRAME_RING_STYLES[author.activeAvatarFrame]
+                  : undefined;
+                return (
                 <div
                   key={m.id}
                   className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm"
                 >
                   <div className="flex items-center gap-3 mb-3">
-                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#2E5C8A] to-[#4A7BA7] flex items-center justify-center font-bold text-xs text-white">
-                      {m.authorName.charAt(0).toUpperCase()}
-                    </div>
-                    <span className="text-xs font-bold">{m.authorName}</span>
+                    <button
+                      onClick={() => navigate(`/user/${m.userId}`)}
+                      aria-label={`View ${authorName}'s profile`}
+                      className={cn(
+                        "w-8 h-8 rounded-full shrink-0",
+                        authorFrameClass && cn("ring-2 ring-offset-1", authorFrameClass),
+                      )}
+                    >
+                      {author?.avatarUrl ? (
+                        <ImageWithFallback
+                          src={author.avatarUrl}
+                          alt=""
+                          className="w-8 h-8 rounded-full object-cover"
+                        />
+                      ) : (
+                        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#2E5C8A] to-[#4A7BA7] flex items-center justify-center font-bold text-xs text-white">
+                          {authorName.charAt(0).toUpperCase()}
+                        </div>
+                      )}
+                    </button>
+                    <button
+                      onClick={() => navigate(`/user/${m.userId}`)}
+                      className="text-xs font-bold hover:underline"
+                    >
+                      {authorName}
+                    </button>
                     <span
                       className={cn(
                         "text-[9px] font-bold px-1.5 py-0.5 rounded-full",
@@ -704,7 +748,8 @@ export const POIDetailScreen = () => {
                     <p className="text-sm text-gray-600 italic">{m.content}</p>
                   )}
                 </div>
-              ))}
+                );
+              })}
             </div>
           </>
         )}
@@ -815,6 +860,7 @@ export const PhotoAttachmentScreen = () => {
   const navigate = useNavigate();
   const { pois, addMemory } = useApp();
   const { user } = useAuth();
+  const { refreshBalance } = useRewards();
   const poi = pois.find((p) => p.id === id);
   const [photo, setPhoto] = useState<string | null>(null);
   const [photoFile, setPhotoFile] = useState<File | null>(null);
@@ -840,6 +886,7 @@ export const PhotoAttachmentScreen = () => {
         visibility,
       });
       if (!savedId) throw new Error("Could not save memory");
+      refreshBalance();
       navigate(`/success/${poi.id}/photo`);
     } catch (err) {
       setUploadError("Upload failed. Check your connection and try again.");
@@ -977,6 +1024,7 @@ export const VideoAttachmentScreen = () => {
   const navigate = useNavigate();
   const { pois, addMemory } = useApp();
   const { user } = useAuth();
+  const { refreshBalance } = useRewards();
   const poi = pois.find((p) => p.id === id);
   const [video, setVideo] = useState<string | null>(null);
   const [videoFile, setVideoFile] = useState<File | null>(null);
@@ -1002,6 +1050,7 @@ export const VideoAttachmentScreen = () => {
         visibility,
       });
       if (!savedId) throw new Error("Could not save memory");
+      refreshBalance();
       navigate(`/success/${poi.id}/video`);
     } catch (err) {
       setUploadError("Upload failed. Check your connection and try again.");
@@ -1138,6 +1187,7 @@ export const TextNoteScreen = () => {
   const { id } = useParams();
   const navigate = useNavigate();
   const { pois, addMemory } = useApp();
+  const { refreshBalance } = useRewards();
   const poi = pois.find((p) => p.id === id);
   const [text, setText] = useState("");
   const [visibility, setVisibility] = useState<"public" | "private" | null>(
@@ -1157,6 +1207,7 @@ export const TextNoteScreen = () => {
     });
     setSaving(false);
     if (!savedId) return;
+    refreshBalance();
     navigate(`/success/${poi.id}/text`);
   };
 
@@ -1393,6 +1444,7 @@ export const MyMemoriesScreen = () => {
 export const ProfileScreen = () => {
   const { memories } = useApp();
   const { user, signOut } = useAuth();
+  const { balance, rewards, ownedRewardIds } = useRewards();
   const navigate = useNavigate();
   const photoCount = memories.filter((m) => m.type === "photo").length;
   const totalPlaces = new Set(memories.map((m) => m.poiId)).size;
@@ -1404,6 +1456,11 @@ export const ProfileScreen = () => {
   const avatarUrl = user?.user_metadata?.avatar_url as string | undefined;
   const initial = displayName.charAt(0).toUpperCase();
   const isGuest = displayName.startsWith("guest-");
+  const activeFrame = user?.user_metadata?.active_avatar_frame as string | undefined;
+  const frameRingClass = activeFrame ? FRAME_RING_STYLES[activeFrame] : undefined;
+  const ownedBadges = rewards.filter(
+    (r) => r.type === "badge" && ownedRewardIds.has(r.id),
+  );
 
   const menuItems = [
     { label: "Privacy Settings", path: "/profile/privacy" },
@@ -1427,7 +1484,10 @@ export const ProfileScreen = () => {
         <button
           onClick={() => navigate("/profile/edit")}
           aria-label="Edit profile"
-          className="relative w-24 h-24 rounded-full mb-4 shadow-lg"
+          className={cn(
+            "relative w-24 h-24 rounded-full mb-4 shadow-lg",
+            frameRingClass && cn("ring-4 ring-offset-2", frameRingClass),
+          )}
         >
           {avatarUrl ? (
             <ImageWithFallback
@@ -1453,6 +1513,24 @@ export const ProfileScreen = () => {
         <p className="text-sm text-gray-500 mt-1">
           {isGuest ? "Browsing as guest" : "Bahrain Explorer"}
         </p>
+
+        {ownedBadges.length > 0 && (
+          <div className="flex items-center justify-center gap-3 mt-4">
+            {ownedBadges.map((badge) => {
+              const Icon = badgeIcon(badge.icon);
+              return (
+                <div
+                  key={badge.id}
+                  title={badge.name}
+                  aria-label={badge.name}
+                  className="w-10 h-10 rounded-full bg-[#2E5C8A]/10 flex items-center justify-center"
+                >
+                  <Icon className="w-5 h-5 text-[#2E5C8A]" />
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-3 gap-4 px-5 mb-8">
@@ -1473,6 +1551,19 @@ export const ProfileScreen = () => {
       </div>
 
       <div className="px-5 space-y-2 pb-8">
+        <button
+          onClick={() => navigate("/profile/rewards")}
+          className="w-full text-left p-4 bg-[#2E5C8A] rounded-2xl font-semibold text-white flex items-center justify-between hover:bg-[#264d75] transition-colors"
+        >
+          <span className="flex items-center gap-2">
+            <Coins className="w-5 h-5" />
+            Rewards
+          </span>
+          <span className="flex items-center gap-1 text-sm font-bold bg-white/15 px-3 py-1 rounded-full">
+            {balance} pts
+            <ChevronRight className="w-4 h-4" />
+          </span>
+        </button>
         {menuItems.map((item) => (
           <button
             key={item.label}

@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import React, { useState, useEffect } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 import {
   ArrowLeft,
   Camera,
@@ -13,6 +13,9 @@ import {
   Contrast,
   Waves,
   Bell,
+  Coins,
+  Lock,
+  Check,
 } from "lucide-react";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
@@ -21,7 +24,10 @@ import { VisibilityPicker } from "./screens";
 import { useApp } from "./App";
 import { useAuth } from "./context/AuthContext";
 import { useAccessibility, type TextSize } from "./context/AccessibilityContext";
+import { useRewards, fetchUserBadges, type Reward } from "./context/RewardsContext";
 import { uploadAvatarFile } from "./lib/uploadAvatarFile";
+import { fetchProfile, type PublicProfile } from "./lib/fetchProfile";
+import { FRAME_RING_STYLES, badgeIcon } from "./lib/rewardVisuals";
 import { supabase } from "./lib/supabase";
 
 function cn(...inputs: ClassValue[]) {
@@ -31,7 +37,7 @@ function cn(...inputs: ClassValue[]) {
 function ScreenHeader({ title }: { title: string }) {
   const navigate = useNavigate();
   return (
-    <header className="bg-[#2E5C8A] p-6 text-white shrink-0 flex items-center gap-4">
+    <header className="bg-[#2E5C8A] -mx-5 p-6 text-white shrink-0 flex items-center gap-4">
       <button onClick={() => navigate(-1)} aria-label="Go back" className="p-1">
         <ArrowLeft className="w-6 h-6" />
       </button>
@@ -62,8 +68,8 @@ function Toggle({
     >
       <span
         className={cn(
-          "absolute top-0.5 w-6 h-6 rounded-full bg-white shadow transition-transform",
-          checked ? "translate-x-[22px]" : "translate-x-0.5",
+          "absolute top-0.5 left-0.5 w-6 h-6 rounded-full bg-white shadow transition-transform",
+          checked ? "translate-x-[20px]" : "translate-x-0",
         )}
       />
     </button>
@@ -104,6 +110,8 @@ export const EditProfileScreen = () => {
   const { user, updateProfile } = useAuth();
   const currentName = (user?.user_metadata?.full_name as string | undefined) || "";
   const currentAvatar = user?.user_metadata?.avatar_url as string | undefined;
+  const activeFrame = user?.user_metadata?.active_avatar_frame as string | undefined;
+  const frameRingClass = activeFrame ? FRAME_RING_STYLES[activeFrame] : undefined;
 
   const [name, setName] = useState(currentName);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(currentAvatar ?? null);
@@ -138,7 +146,12 @@ export const EditProfileScreen = () => {
       <ScreenHeader title="Edit Profile" />
 
       <div className="flex flex-col items-center py-8">
-        <div className="relative w-28 h-28 mb-4">
+        <div
+          className={cn(
+            "relative w-28 h-28 mb-4 rounded-full",
+            frameRingClass && cn("ring-4 ring-offset-2", frameRingClass),
+          )}
+        >
           {avatarPreview ? (
             <ImageWithFallback
               src={avatarPreview}
@@ -519,6 +532,265 @@ export const AboutScreen = () => {
           from Privacy Settings.
         </p>
       </div>
+    </div>
+  );
+};
+
+// ============================================================
+// Rewards
+// ============================================================
+
+function RewardCard({
+  reward,
+  owned,
+  affordable,
+  equipped,
+  busy,
+  onRedeem,
+  onEquip,
+}: {
+  reward: Reward;
+  owned: boolean;
+  affordable: boolean;
+  equipped: boolean;
+  busy: boolean;
+  onRedeem: () => void;
+  onEquip?: () => void;
+}) {
+  const Icon = badgeIcon(reward.icon);
+  const ringClass = FRAME_RING_STYLES[reward.key] ?? "ring-gray-300";
+
+  return (
+    <div className="p-4 bg-gray-50 rounded-2xl flex flex-col items-center text-center gap-2">
+      <div
+        className={cn(
+          "w-14 h-14 rounded-full flex items-center justify-center",
+          reward.type === "avatar_frame" ? cn("bg-white ring-4", ringClass) : "bg-[#2E5C8A]/10",
+          !owned && "opacity-40",
+        )}
+      >
+        <Icon className={cn("w-6 h-6", reward.type === "avatar_frame" ? "text-gray-400" : "text-[#2E5C8A]")} />
+      </div>
+      <p className="font-bold text-sm text-gray-900">{reward.name}</p>
+      {reward.description && (
+        <p className="text-xs text-gray-500 leading-snug">{reward.description}</p>
+      )}
+
+      {owned ? (
+        reward.type === "avatar_frame" ? (
+          <button
+            onClick={onEquip}
+            disabled={busy || equipped}
+            className={cn(
+              "mt-1 w-full text-xs font-bold px-3 py-2 rounded-xl flex items-center justify-center gap-1",
+              equipped ? "bg-[#2E5C8A] text-white" : "border border-[#2E5C8A] text-[#2E5C8A]",
+            )}
+          >
+            {equipped && <Check className="w-3.5 h-3.5" />}
+            {equipped ? "Equipped" : "Equip"}
+          </button>
+        ) : (
+          <div className="mt-1 w-full text-xs font-bold px-3 py-2 rounded-xl bg-[#2E5C8A]/10 text-[#2E5C8A] flex items-center justify-center gap-1">
+            <Check className="w-3.5 h-3.5" />
+            Owned
+          </div>
+        )
+      ) : (
+        <button
+          onClick={onRedeem}
+          disabled={busy || !affordable}
+          className={cn(
+            "mt-1 w-full text-xs font-bold px-3 py-2 rounded-xl flex items-center justify-center gap-1",
+            affordable ? "bg-[#2E5C8A] text-white" : "bg-gray-200 text-gray-400",
+          )}
+        >
+          {!affordable && <Lock className="w-3.5 h-3.5" />}
+          {reward.cost} pts
+        </button>
+      )}
+    </div>
+  );
+}
+
+export const RewardsScreen = () => {
+  const { user, updateProfile } = useAuth();
+  const { balance, rewards, ownedRewardIds, redeemReward } = useRewards();
+  const activeFrame = user?.user_metadata?.active_avatar_frame as string | undefined;
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleRedeem = async (reward: Reward) => {
+    setBusyId(reward.id);
+    setError(null);
+    const { error: redeemError } = await redeemReward(reward.id);
+    if (redeemError) {
+      setError(
+        redeemError === "Not enough points"
+          ? "You don't have enough points for that yet."
+          : "Could not redeem that reward. Please try again.",
+      );
+    }
+    setBusyId(null);
+  };
+
+  const handleEquip = async (reward: Reward) => {
+    setBusyId(reward.id);
+    setError(null);
+    const { error: equipError } = await updateProfile({ activeAvatarFrame: reward.key });
+    if (equipError) setError("Could not equip that frame. Please try again.");
+    setBusyId(null);
+  };
+
+  const badges = rewards.filter((r) => r.type === "badge");
+  const frames = rewards.filter((r) => r.type === "avatar_frame");
+
+  return (
+    <div className="flex flex-col min-h-full bg-white px-5 pb-8">
+      <ScreenHeader title="Rewards" />
+
+      <div className="mt-6 p-5 bg-[#2E5C8A] rounded-2xl flex items-center gap-3 text-white">
+        <div className="w-11 h-11 rounded-full bg-white/15 flex items-center justify-center shrink-0">
+          <Coins className="w-6 h-6" />
+        </div>
+        <div>
+          <p className="text-2xl font-black leading-none">{balance}</p>
+          <p className="text-xs text-white/80 mt-1">points • +2 per memory, up to 5/day</p>
+        </div>
+      </div>
+
+      {error && <p className="text-xs text-red-500 mt-4 text-center">{error}</p>}
+
+      <h2 className="text-sm font-bold text-gray-400 uppercase tracking-wide mt-8 mb-3">
+        Badges
+      </h2>
+      <div className="grid grid-cols-2 gap-3">
+        {badges.map((reward) => (
+          <RewardCard
+            key={reward.id}
+            reward={reward}
+            owned={ownedRewardIds.has(reward.id)}
+            affordable={balance >= reward.cost}
+            equipped={false}
+            busy={busyId === reward.id}
+            onRedeem={() => handleRedeem(reward)}
+          />
+        ))}
+      </div>
+
+      <h2 className="text-sm font-bold text-gray-400 uppercase tracking-wide mt-8 mb-3">
+        Avatar Frames
+      </h2>
+      <div className="grid grid-cols-2 gap-3">
+        {frames.map((reward) => (
+          <RewardCard
+            key={reward.id}
+            reward={reward}
+            owned={ownedRewardIds.has(reward.id)}
+            affordable={balance >= reward.cost}
+            equipped={activeFrame === reward.key}
+            busy={busyId === reward.id}
+            onRedeem={() => handleRedeem(reward)}
+            onEquip={() => handleEquip(reward)}
+          />
+        ))}
+      </div>
+    </div>
+  );
+};
+
+// ============================================================
+// Public User Profile (avatar, equipped frame, owned badges)
+// ============================================================
+
+export const UserProfileScreen = () => {
+  const { userId } = useParams();
+  const [profile, setProfile] = useState<PublicProfile | null | undefined>(undefined);
+  const [badges, setBadges] = useState<Reward[]>([]);
+
+  useEffect(() => {
+    if (!userId) return;
+    setProfile(undefined);
+    setBadges([]);
+    (async () => {
+      const [profileResult, badgesResult] = await Promise.all([
+        fetchProfile(userId),
+        fetchUserBadges(userId),
+      ]);
+      setProfile(profileResult);
+      setBadges(badgesResult);
+    })();
+  }, [userId]);
+
+  if (profile === undefined) {
+    return (
+      <div className="flex flex-col min-h-full bg-white px-5 pb-8">
+        <ScreenHeader title="Profile" />
+      </div>
+    );
+  }
+
+  if (profile === null) {
+    return (
+      <div className="flex flex-col min-h-full bg-white px-5 pb-8">
+        <ScreenHeader title="Profile" />
+        <p className="text-sm text-gray-400 text-center mt-8">This user could not be found.</p>
+      </div>
+    );
+  }
+
+  const displayName = profile.fullName || "Explorer";
+  const initial = displayName.charAt(0).toUpperCase();
+  const frameRingClass = profile.activeAvatarFrame
+    ? FRAME_RING_STYLES[profile.activeAvatarFrame]
+    : undefined;
+
+  return (
+    <div className="flex flex-col min-h-full bg-white px-5 pb-8">
+      <ScreenHeader title={displayName} />
+
+      <div className="flex flex-col items-center py-8">
+        <div
+          className={cn(
+            "w-24 h-24 rounded-full",
+            frameRingClass && cn("ring-4 ring-offset-2", frameRingClass),
+          )}
+        >
+          {profile.avatarUrl ? (
+            <ImageWithFallback
+              src={profile.avatarUrl}
+              alt=""
+              className="w-24 h-24 rounded-full object-cover"
+            />
+          ) : (
+            <div className="w-24 h-24 rounded-full bg-gradient-to-br from-[#2E5C8A] to-[#4A7BA7] flex items-center justify-center text-3xl font-black text-white">
+              {initial}
+            </div>
+          )}
+        </div>
+        <p className="text-xl font-bold text-gray-900 mt-4">{displayName}</p>
+      </div>
+
+      <h2 className="text-sm font-bold text-gray-400 uppercase tracking-wide mb-3">Badges</h2>
+      {badges.length === 0 ? (
+        <p className="text-sm text-gray-400 py-4">No badges earned yet.</p>
+      ) : (
+        <div className="grid grid-cols-2 gap-3">
+          {badges.map((badge) => {
+            const Icon = badgeIcon(badge.icon);
+            return (
+              <div
+                key={badge.id}
+                className="p-4 bg-gray-50 rounded-2xl flex flex-col items-center text-center gap-2"
+              >
+                <div className="w-14 h-14 rounded-full bg-[#2E5C8A]/10 flex items-center justify-center">
+                  <Icon className="w-6 h-6 text-[#2E5C8A]" />
+                </div>
+                <p className="font-bold text-sm text-gray-900">{badge.name}</p>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 };

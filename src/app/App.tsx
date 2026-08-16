@@ -5,6 +5,7 @@ import { router } from "./routes";
 import { Memory, POI } from "./data/poi";
 import { supabase } from "./lib/supabase";
 import { AuthProvider, useAuth } from "./context/AuthContext";
+import { RewardsProvider } from "./context/RewardsContext";
 import { useAccessibility } from "./context/AccessibilityContext";
 import { useUserLocation, distanceKm, formatDistance } from "./lib/useUserLocation";
 
@@ -270,7 +271,9 @@ export default function App() {
   return (
     <AuthProvider>
       <AppProvider>
-        <RouterWithMotionConfig />
+        <RewardsProvider>
+          <RouterWithMotionConfig />
+        </RewardsProvider>
       </AppProvider>
     </AuthProvider>
   );
